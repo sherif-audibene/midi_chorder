@@ -44,5 +44,11 @@ public:
 
 private:
     //==============================================================================
+    // Chord intervals in semitones (major chord: root, major 3rd, perfect 5th)
+    std::vector<int> chordIntervals { 0, 4, 7 };
+    
+    // Helper to add chord notes for a given root note
+    void addChordNotes (juce::MidiBuffer& outputBuffer, const juce::MidiMessage& originalMessage, int samplePosition);
+    
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };

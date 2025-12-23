@@ -124,32 +124,61 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
 void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                               juce::MidiBuffer& midiMessages)
 {
-    juce::ignoreUnused (midiMessages);
-
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    // Process MIDI: generate chords from incoming notes
+    juce::MidiBuffer processedMidi;
+    
+    for (const auto metadata : midiMessages)
     {
-        auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
+        auto message = metadata.getMessage();
+        auto samplePosition = metadata.samplePosition;
+        
+        if (message.isNoteOn() || message.isNoteOff())
+        {
+            // Add chord notes for this note event
+            addChordNotes (processedMidi, message, samplePosition);
+        }
+        else
+        {
+            // Pass through all other MIDI messages (CC, pitch bend, etc.)
+            processedMidi.addEvent (message, samplePosition);
+        }
+    }
+    
+    // Replace input buffer with our processed MIDI
+    midiMessages.swapWith (processedMidi);
+}
+
+void AudioPluginAudioProcessor::addChordNotes (juce::MidiBuffer& outputBuffer, 
+                                                const juce::MidiMessage& originalMessage, 
+                                                int samplePosition)
+{
+    const int rootNote = originalMessage.getNoteNumber();
+    const int velocity = originalMessage.getVelocity();
+    const int channel = originalMessage.getChannel();
+    
+    for (int interval : chordIntervals)
+    {
+        int chordNote = rootNote + interval;
+        
+        // Ensure note is within valid MIDI range (0-127)
+        if (chordNote >= 0 && chordNote <= 127)
+        {
+            juce::MidiMessage chordMessage;
+            
+            if (originalMessage.isNoteOn())
+                chordMessage = juce::MidiMessage::noteOn (channel, chordNote, (juce::uint8) velocity);
+            else
+                chordMessage = juce::MidiMessage::noteOff (channel, chordNote, (juce::uint8) velocity);
+            
+            outputBuffer.addEvent (chordMessage, samplePosition);
+        }
     }
 }
 

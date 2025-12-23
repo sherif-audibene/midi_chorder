@@ -33,14 +33,16 @@ set(SourceFiles
         Source/PluginEditor.h
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
+        Source/Square.cpp
+        Source/Square.h
 )
 
 # Change these to your own preferences
 juce_add_plugin(${PROJECT_NAME}
         COMPANY_NAME theaudioprogrammer
         IS_SYNTH FALSE
-        NEEDS_MIDI_INPUT FALSE
-        NEEDS_MIDI_OUTPUT FALSE
+        NEEDS_MIDI_INPUT TRUE
+        NEEDS_MIDI_OUTPUT TRUE
         IS_MIDI_EFFECT FALSE
         EDITOR_WANTS_KEYBOARD_FOCUS FALSE
         JUCE_VST3_CAN_REPLACE_VST2 FALSE
