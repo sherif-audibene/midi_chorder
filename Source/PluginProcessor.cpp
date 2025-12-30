@@ -12,6 +12,8 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                      #endif
                        )
 {
+    // Initialize all rhythm patterns
+    patterns = RhythmPatternFactory::createAllPatterns();
 }
 
 AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
@@ -58,8 +60,7 @@ double AudioPluginAudioProcessor::getTailLengthSeconds() const
 
 int AudioPluginAudioProcessor::getNumPrograms()
 {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
+    return 1;
 }
 
 int AudioPluginAudioProcessor::getCurrentProgram()
@@ -86,15 +87,21 @@ void AudioPluginAudioProcessor::changeProgramName (int index, const juce::String
 //==============================================================================
 void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    currentSampleRate = sampleRate;
+    accumulatedBeats = 0.0;
+    lastPatternBeat = 0.0;
+    pendingNoteOffs.clear();
+    activeOutputNotes.clear();
+    heldNotes.clear();
+    currentRootNote = -1;
+    juce::ignoreUnused (samplesPerBlock);
 }
 
 void AudioPluginAudioProcessor::releaseResources()
 {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
+    pendingNoteOffs.clear();
+    activeOutputNotes.clear();
+    heldNotes.clear();
 }
 
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -103,15 +110,10 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
     juce::ignoreUnused (layouts);
     return true;
   #else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    // Some plugin hosts, such as certain GarageBand versions, will only
-    // load plugins that support stereo bus layouts.
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
      && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    // This checks if the input layout matches the output layout
    #if ! JucePlugin_IsSynth
     if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
         return false;
@@ -131,62 +133,241 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Move input MIDI to temp buffer so we can rebuild the output
+    const int numSamples = buffer.getNumSamples();
+    
+    // Get tempo and transport info from host
+    double bpm = internalTempo.load();
+    bool useHostTiming = false;
+    double ppqPosition = 0.0;
+    
+    if (auto* playHead = getPlayHead())
+    {
+        if (auto posInfo = playHead->getPosition())
+        {
+            if (auto bpmOpt = posInfo->getBpm())
+            {
+                bpm = *bpmOpt;
+            }
+            
+            // Only use host PPQ if transport is playing
+            if (posInfo->getIsPlaying())
+            {
+                if (auto ppqOpt = posInfo->getPpqPosition())
+                {
+                    ppqPosition = *ppqOpt;
+                    useHostTiming = true;
+                }
+            }
+        }
+    }
+    
+    // Process input MIDI - track held notes for chord
     juce::MidiBuffer inputMidi;
     inputMidi.swapWith (midiMessages);
-    // Now midiMessages is empty, inputMidi has the original input
     
-    // Process each input MIDI message and add chord notes to output
     for (const auto metadata : inputMidi)
     {
         auto message = metadata.getMessage();
-        auto samplePosition = metadata.samplePosition;
         
-        if (message.isNoteOn() || message.isNoteOff())
+        if (message.isNoteOn())
         {
-            // Generate chord notes and add directly to output buffer
-            addChordNotes (midiMessages, message, samplePosition);
+            int noteNum = message.getNoteNumber();
+            heldNotes.insert (noteNum);
+            
+            // Use lowest held note as root
+            if (heldNotes.size() == 1 || noteNum < currentRootNote)
+            {
+                currentRootNote = *heldNotes.begin(); // Always use lowest note
+            }
+        }
+        else if (message.isNoteOff())
+        {
+            int noteNum = message.getNoteNumber();
+            heldNotes.erase (noteNum);
+            
+            if (heldNotes.empty())
+            {
+                // All notes released - stop pattern and turn off active notes
+                currentRootNote = -1;
+                stopAllActiveNotes (midiMessages, metadata.samplePosition);
+            }
+            else
+            {
+                // Update root to lowest remaining note
+                currentRootNote = *heldNotes.begin();
+            }
+        }
+    }
+    
+    // Process rhythm pattern if enabled and we have held notes
+    // Always run pattern when notes are held (don't require host transport)
+    if (patternEnabled.load() && currentRootNote >= 0)
+    {
+        processRhythmPattern (midiMessages, numSamples, bpm, useHostTiming, ppqPosition);
+    }
+    
+    // Process pending note-offs
+    for (auto it = pendingNoteOffs.begin(); it != pendingNoteOffs.end(); )
+    {
+        if (it->samplePosition < numSamples)
+        {
+            auto noteOff = juce::MidiMessage::noteOff (it->channel, it->noteNumber);
+            midiMessages.addEvent (noteOff, it->samplePosition);
+            activeOutputNotes.erase (it->noteNumber);
+            it = pendingNoteOffs.erase (it);
         }
         else
         {
-            // Pass through all other MIDI messages (CC, pitch bend, etc.)
-            midiMessages.addEvent (message, samplePosition);
+            it->samplePosition -= numSamples;
+            ++it;
         }
     }
     
-    // Update keyboard state for UI visualization (don't inject, just observe)
-    keyboardState.processNextMidiBuffer (midiMessages, 0, buffer.getNumSamples(), false);
+    // Update keyboard state for UI visualization
+    keyboardState.processNextMidiBuffer (midiMessages, 0, numSamples, false);
 }
 
-void AudioPluginAudioProcessor::addChordNotes (juce::MidiBuffer& outputBuffer, 
-                                                const juce::MidiMessage& originalMessage, 
-                                                int samplePosition)
+void AudioPluginAudioProcessor::processRhythmPattern (juce::MidiBuffer& midiMessages, 
+                                                       int numSamples,
+                                                       double bpm, 
+                                                       bool useHostTiming,
+                                                       double ppqPosition)
 {
-    const int rootNote = originalMessage.getNoteNumber();
-    const float velocity = originalMessage.getFloatVelocity();
-    const int channel = originalMessage.getChannel();
-    const bool isNoteOn = originalMessage.isNoteOn();
+    const int patternIdx = juce::jlimit (0, (int) patterns.size() - 1, currentPatternIndex.load());
+    const auto& pattern = patterns[patternIdx];
+    const double patternLength = pattern.lengthInBeats;
     
-    for (int interval : chordIntervals)
+    // Calculate beats per sample
+    const double beatsPerSecond = bpm / 60.0;
+    const double beatsPerSample = beatsPerSecond / currentSampleRate;
+    const double beatsInBlock = beatsPerSample * numSamples;
+    
+    // Determine start beat position
+    double startBeat;
+    if (useHostTiming)
     {
-        int chordNote = rootNote + interval;
+        // Use host PPQ position when transport is playing
+        startBeat = std::fmod (ppqPosition, patternLength);
+    }
+    else
+    {
+        // Use internal accumulator for standalone/stopped transport
+        startBeat = std::fmod (accumulatedBeats, patternLength);
+    }
+    
+    double endBeat = startBeat + beatsInBlock;
+    
+    // Add notes for this block
+    addPatternNotes (midiMessages, startBeat, endBeat, 0, numSamples, bpm);
+    
+    // Always update accumulated beats (used for standalone/internal timing)
+    accumulatedBeats += beatsInBlock;
+    // Keep it from growing too large
+    if (accumulatedBeats > patternLength * 1000.0)
+        accumulatedBeats = std::fmod (accumulatedBeats, patternLength);
+}
+
+void AudioPluginAudioProcessor::addPatternNotes (juce::MidiBuffer& midiMessages,
+                                                  double startBeat,
+                                                  double endBeat,
+                                                  int blockStartSample,
+                                                  int numSamples,
+                                                  double bpm)
+{
+    const int patternIdx = juce::jlimit (0, (int) patterns.size() - 1, currentPatternIndex.load());
+    const auto& pattern = patterns[patternIdx];
+    const double patternLength = pattern.lengthInBeats;
+    
+    const double beatsPerSecond = bpm / 60.0;
+    const double samplesPerBeat = currentSampleRate / beatsPerSecond;
+    
+    for (const auto& note : pattern.notes)
+    {
+        double noteBeat = note.beatPosition;
         
-        // Ensure note is within valid MIDI range (0-127)
-        if (chordNote >= 0 && chordNote <= 127)
+        // Check if note falls within this block (handle pattern wrap)
+        bool shouldTrigger = false;
+        double relativeBeat = 0.0;
+        
+        if (endBeat > patternLength)
         {
-            juce::MidiMessage chordMessage = isNoteOn
-                ? juce::MidiMessage::noteOn (channel, chordNote, velocity)
-                : juce::MidiMessage::noteOff (channel, chordNote, velocity);
+            // Pattern wraps in this block
+            if (noteBeat >= startBeat || noteBeat < (endBeat - patternLength))
+            {
+                shouldTrigger = true;
+                if (noteBeat >= startBeat)
+                    relativeBeat = noteBeat - startBeat;
+                else
+                    relativeBeat = (patternLength - startBeat) + noteBeat;
+            }
+        }
+        else
+        {
+            // Normal case - no wrap
+            if (noteBeat >= startBeat && noteBeat < endBeat)
+            {
+                shouldTrigger = true;
+                relativeBeat = noteBeat - startBeat;
+            }
+        }
+        
+        if (shouldTrigger && currentRootNote >= 0)
+        {
+            int midiNote = getChordNote (currentRootNote, note.chordIndex);
             
-            outputBuffer.addEvent (chordMessage, samplePosition);
+            if (midiNote >= 0 && midiNote <= 127)
+            {
+                int samplePos = blockStartSample + static_cast<int> (relativeBeat * samplesPerBeat);
+                samplePos = juce::jlimit (0, numSamples - 1, samplePos);
+                
+                // Note on
+                auto noteOn = juce::MidiMessage::noteOn (1, midiNote, note.velocity);
+                midiMessages.addEvent (noteOn, samplePos);
+                activeOutputNotes.insert (midiNote);
+                
+                // Schedule note off
+                int noteOffSample = samplePos + static_cast<int> (note.duration * samplesPerBeat);
+                pendingNoteOffs.push_back ({ midiNote, 1, noteOffSample });
+            }
         }
     }
+}
+
+int AudioPluginAudioProcessor::getChordNote (int rootNote, int chordIndex) const
+{
+    const int chordType = juce::jlimit (0, (int) chordIntervals.size() - 1, chordTypeIndex.load());
+    const auto& intervals = chordIntervals[chordType];
+    
+    if (chordIndex == -1)
+    {
+        // Bass note - one octave down from root
+        return rootNote - 12;
+    }
+    
+    if (chordIndex >= 0 && chordIndex < (int) intervals.size())
+    {
+        return rootNote + intervals[chordIndex];
+    }
+    
+    // Default to root if index out of range
+    return rootNote;
+}
+
+void AudioPluginAudioProcessor::stopAllActiveNotes (juce::MidiBuffer& midiMessages, int samplePosition)
+{
+    for (int note : activeOutputNotes)
+    {
+        auto noteOff = juce::MidiMessage::noteOff (1, note);
+        midiMessages.addEvent (noteOff, samplePosition);
+    }
+    activeOutputNotes.clear();
+    pendingNoteOffs.clear();
 }
 
 //==============================================================================
 bool AudioPluginAudioProcessor::hasEditor() const
 {
-    return true; // (change this to false if you choose to not supply an editor)
+    return true;
 }
 
 juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor()
@@ -197,21 +378,35 @@ juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor()
 //==============================================================================
 void AudioPluginAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+    juce::ValueTree state ("ChordPlayerState");
+    state.setProperty ("patternIndex", currentPatternIndex.load(), nullptr);
+    state.setProperty ("chordType", chordTypeIndex.load(), nullptr);
+    state.setProperty ("tempo", internalTempo.load(), nullptr);
+    state.setProperty ("enabled", patternEnabled.load(), nullptr);
+    
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
+    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
+    
+    if (xml != nullptr)
+    {
+        juce::ValueTree state = juce::ValueTree::fromXml (*xml);
+        
+        if (state.isValid())
+        {
+            currentPatternIndex.store (state.getProperty ("patternIndex", 0));
+            chordTypeIndex.store (state.getProperty ("chordType", 0));
+            internalTempo.store (state.getProperty ("tempo", 120.0f));
+            patternEnabled.store (state.getProperty ("enabled", true));
+        }
+    }
 }
 
 //==============================================================================
-// This creates new instances of the plugin..
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new AudioPluginAudioProcessor();

@@ -33,24 +33,23 @@ set(SourceFiles
         Source/PluginEditor.h
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
-        Source/Square.cpp
-        Source/Square.h
+        Source/RhythmPattern.h
 )
 
 # Change these to your own preferences
 juce_add_plugin(${PROJECT_NAME}
         COMPANY_NAME ShixoMusic
-        IS_SYNTH TRUE
+        IS_SYNTH FALSE
         NEEDS_MIDI_INPUT TRUE
         NEEDS_MIDI_OUTPUT TRUE
-        IS_MIDI_EFFECT FALSE
+        IS_MIDI_EFFECT TRUE
         EDITOR_WANTS_KEYBOARD_FOCUS FALSE
         JUCE_VST3_CAN_REPLACE_VST2 FALSE
         COPY_PLUGIN_AFTER_BUILD TRUE
         PLUGIN_MANUFACTURER_CODE Tap1
         PLUGIN_CODE Reg0
         FORMATS VST3 AU Standalone
-        PRODUCT_NAME "midi_medo"        
+        PRODUCT_NAME "Chord Pattern Player"        
 )
 
 # How we want our SourceFiles to appear in our IDE
