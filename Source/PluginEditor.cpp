@@ -3,36 +3,47 @@
 
 //==============================================================================
 AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p)
+    : AudioProcessorEditor (&p), 
+      processorRef (p),
+      midiKeyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
+    // Configure the keyboard appearance
+    midiKeyboard.setKeyWidth (40.0f);
+    midiKeyboard.setAvailableRange (36, 96); // C2 to C7
+    addAndMakeVisible (midiKeyboard);
 
-    juce::ignoreUnused (processorRef);
-    // Make sure that before the constructor has finished, you've set the
-    // editor's size to whatever you need it to be.
-    addAndMakeVisible(square);
-
-    setSize (400, 600);
+    setSize (800, 200);
+    
+    // Start timer to refresh keyboard display
+    startTimerHz (30);
 }
 
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor()
 {
+    stopTimer();
 }
 
 //==============================================================================
 void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 {
-
-    // (Our component is opaque, so we must completely fill the background with a solid colour)
-    g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+    g.fillAll (juce::Colours::darkgrey);
 
     g.setColour (juce::Colours::white);
-    g.setFont (15.0f);
-    g.drawFittedText ("Hello World!", getLocalBounds(), juce::Justification::centred, 1);
+    g.setFont (18.0f);
+    g.drawText ("MIDI Chord Generator - Output Notes", 
+                getLocalBounds().removeFromTop (30), 
+                juce::Justification::centred, true);
 }
 
 void AudioPluginAudioProcessorEditor::resized()
 {
-    // This is generally where you'll want to lay out the positions of any
-    // subcomponents in your editor..
-    square.setBounds(0,0,300,300);
+    auto bounds = getLocalBounds();
+    bounds.removeFromTop (35); // Space for title
+    midiKeyboard.setBounds (bounds);
+}
+
+void AudioPluginAudioProcessorEditor::timerCallback()
+{
+    // Repaint keyboard to show current notes
+    midiKeyboard.repaint();
 }

@@ -131,28 +131,31 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Process MIDI: generate chords from incoming notes
-    juce::MidiBuffer processedMidi;
+    // Move input MIDI to temp buffer so we can rebuild the output
+    juce::MidiBuffer inputMidi;
+    inputMidi.swapWith (midiMessages);
+    // Now midiMessages is empty, inputMidi has the original input
     
-    for (const auto metadata : midiMessages)
+    // Process each input MIDI message and add chord notes to output
+    for (const auto metadata : inputMidi)
     {
         auto message = metadata.getMessage();
         auto samplePosition = metadata.samplePosition;
         
         if (message.isNoteOn() || message.isNoteOff())
         {
-            // Add chord notes for this note event
-            addChordNotes (processedMidi, message, samplePosition);
+            // Generate chord notes and add directly to output buffer
+            addChordNotes (midiMessages, message, samplePosition);
         }
         else
         {
             // Pass through all other MIDI messages (CC, pitch bend, etc.)
-            processedMidi.addEvent (message, samplePosition);
+            midiMessages.addEvent (message, samplePosition);
         }
     }
     
-    // Replace input buffer with our processed MIDI
-    midiMessages.swapWith (processedMidi);
+    // Update keyboard state for UI visualization (don't inject, just observe)
+    keyboardState.processNextMidiBuffer (midiMessages, 0, buffer.getNumSamples(), false);
 }
 
 void AudioPluginAudioProcessor::addChordNotes (juce::MidiBuffer& outputBuffer, 
@@ -160,8 +163,9 @@ void AudioPluginAudioProcessor::addChordNotes (juce::MidiBuffer& outputBuffer,
                                                 int samplePosition)
 {
     const int rootNote = originalMessage.getNoteNumber();
-    const int velocity = originalMessage.getVelocity();
+    const float velocity = originalMessage.getFloatVelocity();
     const int channel = originalMessage.getChannel();
+    const bool isNoteOn = originalMessage.isNoteOn();
     
     for (int interval : chordIntervals)
     {
@@ -170,12 +174,9 @@ void AudioPluginAudioProcessor::addChordNotes (juce::MidiBuffer& outputBuffer,
         // Ensure note is within valid MIDI range (0-127)
         if (chordNote >= 0 && chordNote <= 127)
         {
-            juce::MidiMessage chordMessage;
-            
-            if (originalMessage.isNoteOn())
-                chordMessage = juce::MidiMessage::noteOn (channel, chordNote, (juce::uint8) velocity);
-            else
-                chordMessage = juce::MidiMessage::noteOff (channel, chordNote, (juce::uint8) velocity);
+            juce::MidiMessage chordMessage = isNoteOn
+                ? juce::MidiMessage::noteOn (channel, chordNote, velocity)
+                : juce::MidiMessage::noteOff (channel, chordNote, velocity);
             
             outputBuffer.addEvent (chordMessage, samplePosition);
         }

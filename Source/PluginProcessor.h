@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_utils/juce_audio_utils.h>
 
 //==============================================================================
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
@@ -9,6 +10,9 @@ public:
     //==============================================================================
     AudioPluginAudioProcessor();
     ~AudioPluginAudioProcessor() override;
+    
+    // Keyboard state to visualize output notes in the UI
+    juce::MidiKeyboardState keyboardState;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;

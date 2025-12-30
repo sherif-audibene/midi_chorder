@@ -9,7 +9,7 @@ void Square::paint (juce::Graphics& g){
     g.drawRect(100,100,100,100);
     g.setColour(juce::Colours::aqua);
     g.setFont(16.f);
-    g.drawText("Sherif first plugins",getBounds(),juce::Justification::centred);
+    g.drawText("Change the text",getBounds(),juce::Justification::centred);
 }
 
 void  Square::resized(){

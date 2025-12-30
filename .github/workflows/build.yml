@@ -1,0 +1,52 @@
+name: Build Plugin
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure CMake
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+      
+      - name: Build
+        run: cmake --build build --config Release
+      
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-VST3
+          path: build/SimpleJucePluginTemplate_artefacts/Release/VST3/
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure CMake
+        run: cmake -B build
+      
+      - name: Build
+        run: cmake --build build --config Release
+      
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-VST3
+          path: build/SimpleJucePluginTemplate_artefacts/Release/VST3/
+      
+      - name: Upload AU
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-AU
+          path: build/SimpleJucePluginTemplate_artefacts/Release/AU/
+
+
+
