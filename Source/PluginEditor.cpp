@@ -19,17 +19,16 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     setupComboBox (patternSelector);
     addAndMakeVisible (patternSelector);
     
-    // Chord type selector setup
-    setupLabel (chordTypeLabel);
-    addAndMakeVisible (chordTypeLabel);
+    // Detected chord display
+    setupLabel (detectedChordLabel);
+    addAndMakeVisible (detectedChordLabel);
     
-    chordTypeSelector.addItemList (AudioPluginAudioProcessor::chordTypeNames, 1);
-    chordTypeSelector.setSelectedId (processorRef.chordTypeIndex.load() + 1, juce::dontSendNotification);
-    chordTypeSelector.onChange = [this] {
-        processorRef.chordTypeIndex.store (chordTypeSelector.getSelectedId() - 1);
-    };
-    setupComboBox (chordTypeSelector);
-    addAndMakeVisible (chordTypeSelector);
+    detectedChordValue.setFont (juce::FontOptions (16.0f).withStyle ("Bold"));
+    detectedChordValue.setColour (juce::Label::textColourId, juce::Colour (0xff4ecdc4));
+    detectedChordValue.setColour (juce::Label::backgroundColourId, juce::Colour (0xff2a2a4a));
+    detectedChordValue.setColour (juce::Label::outlineColourId, juce::Colour (0xff4a4a6a));
+    detectedChordValue.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (detectedChordValue);
     
     // Tempo slider setup
     setupLabel (tempoLabel);
@@ -108,7 +107,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     // Title with accent color
     g.setColour (juce::Colour (0xff4ecdc4));
     g.setFont (juce::FontOptions (24.0f).withStyle ("Bold"));
-    g.drawText ("CHORD PATTERN PLAYER", getLocalBounds().removeFromTop (45), 
+    g.drawText ("Sherif Hamad CHORD PATTERN PLAYER", getLocalBounds().removeFromTop (45), 
                 juce::Justification::centred, true);
     
     // Subtle separator line
@@ -138,10 +137,10 @@ void AudioPluginAudioProcessorEditor::resized()
     
     controlRow.removeFromLeft (20);
     
-    // Chord type selector  
-    chordTypeLabel.setBounds (controlRow.removeFromLeft (55));
+    // Detected chord display  
+    detectedChordLabel.setBounds (controlRow.removeFromLeft (55));
     controlRow.removeFromLeft (5);
-    chordTypeSelector.setBounds (controlRow.removeFromLeft (100));
+    detectedChordValue.setBounds (controlRow.removeFromLeft (100));
     
     controlRow.removeFromLeft (20);
     
@@ -168,7 +167,9 @@ void AudioPluginAudioProcessorEditor::timerCallback()
     // Sync UI with processor state
     if (patternSelector.getSelectedId() - 1 != processorRef.currentPatternIndex.load())
         patternSelector.setSelectedId (processorRef.currentPatternIndex.load() + 1, juce::dontSendNotification);
-        
-    if (chordTypeSelector.getSelectedId() - 1 != processorRef.chordTypeIndex.load())
-        chordTypeSelector.setSelectedId (processorRef.chordTypeIndex.load() + 1, juce::dontSendNotification);
+    
+    // Update detected chord display
+    juce::String chordName = processorRef.getDetectedChordName();
+    if (detectedChordValue.getText() != chordName)
+        detectedChordValue.setText (chordName, juce::dontSendNotification);
 }

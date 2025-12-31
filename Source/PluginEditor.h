@@ -23,9 +23,9 @@ private:
     juce::ComboBox patternSelector;
     juce::Label patternLabel { {}, "Rhythm:" };
     
-    // Chord type selector
-    juce::ComboBox chordTypeSelector;
-    juce::Label chordTypeLabel { {}, "Chord:" };
+    // Detected chord display
+    juce::Label detectedChordLabel { {}, "Chord:" };
+    juce::Label detectedChordValue { {}, "---" };
     
     // Tempo control
     juce::Slider tempoSlider;

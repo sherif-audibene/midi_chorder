@@ -93,7 +93,8 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     pendingNoteOffs.clear();
     activeOutputNotes.clear();
     heldNotes.clear();
-    currentRootNote = -1;
+    currentChord = DetectedChord();
+    setDetectedChordName ("---");
     juce::ignoreUnused (samplesPerBlock);
 }
 
@@ -102,6 +103,14 @@ void AudioPluginAudioProcessor::releaseResources()
     pendingNoteOffs.clear();
     activeOutputNotes.clear();
     heldNotes.clear();
+    currentChord = DetectedChord();
+    setDetectedChordName ("---");
+}
+
+void AudioPluginAudioProcessor::updateDetectedChord()
+{
+    currentChord = ChordDetector::detect (heldNotes);
+    setDetectedChordName (currentChord.chordName);
 }
 
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -161,9 +170,11 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
     
-    // Process input MIDI - track held notes for chord
+    // Process input MIDI - track held notes for chord detection
     juce::MidiBuffer inputMidi;
     inputMidi.swapWith (midiMessages);
+    
+    bool chordChanged = false;
     
     for (const auto metadata : inputMidi)
     {
@@ -171,37 +182,33 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         
         if (message.isNoteOn())
         {
-            int noteNum = message.getNoteNumber();
-            heldNotes.insert (noteNum);
-            
-            // Use lowest held note as root
-            if (heldNotes.size() == 1 || noteNum < currentRootNote)
-            {
-                currentRootNote = *heldNotes.begin(); // Always use lowest note
-            }
+            heldNotes.insert (message.getNoteNumber());
+            chordChanged = true;
         }
         else if (message.isNoteOff())
         {
-            int noteNum = message.getNoteNumber();
-            heldNotes.erase (noteNum);
+            heldNotes.erase (message.getNoteNumber());
             
             if (heldNotes.empty())
             {
                 // All notes released - stop pattern and turn off active notes
-                currentRootNote = -1;
+                currentChord = DetectedChord();
+                setDetectedChordName ("---");
                 stopAllActiveNotes (midiMessages, metadata.samplePosition);
             }
-            else
-            {
-                // Update root to lowest remaining note
-                currentRootNote = *heldNotes.begin();
-            }
+            
+            chordChanged = true;
         }
     }
     
-    // Process rhythm pattern if enabled and we have held notes
-    // Always run pattern when notes are held (don't require host transport)
-    if (patternEnabled.load() && currentRootNote >= 0)
+    // Update chord detection when notes change
+    if (chordChanged && !heldNotes.empty())
+    {
+        updateDetectedChord();
+    }
+    
+    // Process rhythm pattern if enabled and we have a valid chord
+    if (patternEnabled.load() && currentChord.isValid)
     {
         processRhythmPattern (midiMessages, numSamples, bpm, useHostTiming, ppqPosition);
     }
@@ -311,9 +318,9 @@ void AudioPluginAudioProcessor::addPatternNotes (juce::MidiBuffer& midiMessages,
             }
         }
         
-        if (shouldTrigger && currentRootNote >= 0)
+        if (shouldTrigger && currentChord.isValid)
         {
-            int midiNote = getChordNote (currentRootNote, note.chordIndex);
+            int midiNote = getChordNote (note.chordIndex);
             
             if (midiNote >= 0 && midiNote <= 127)
             {
@@ -333,10 +340,13 @@ void AudioPluginAudioProcessor::addPatternNotes (juce::MidiBuffer& midiMessages,
     }
 }
 
-int AudioPluginAudioProcessor::getChordNote (int rootNote, int chordIndex) const
+int AudioPluginAudioProcessor::getChordNote (int chordIndex) const
 {
-    const int chordType = juce::jlimit (0, (int) chordIntervals.size() - 1, chordTypeIndex.load());
-    const auto& intervals = chordIntervals[chordType];
+    if (!currentChord.isValid)
+        return -1;
+        
+    int rootNote = currentChord.rootNote;
+    const auto& intervals = currentChord.intervals;
     
     if (chordIndex == -1)
     {
@@ -380,7 +390,6 @@ void AudioPluginAudioProcessor::getStateInformation (juce::MemoryBlock& destData
 {
     juce::ValueTree state ("ChordPlayerState");
     state.setProperty ("patternIndex", currentPatternIndex.load(), nullptr);
-    state.setProperty ("chordType", chordTypeIndex.load(), nullptr);
     state.setProperty ("tempo", internalTempo.load(), nullptr);
     state.setProperty ("enabled", patternEnabled.load(), nullptr);
     
@@ -399,7 +408,6 @@ void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeI
         if (state.isValid())
         {
             currentPatternIndex.store (state.getProperty ("patternIndex", 0));
-            chordTypeIndex.store (state.getProperty ("chordType", 0));
             internalTempo.store (state.getProperty ("tempo", 120.0f));
             patternEnabled.store (state.getProperty ("enabled", true));
         }

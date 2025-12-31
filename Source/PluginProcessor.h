@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "RhythmPattern.h"
+#include "ChordDetector.h"
 #include <set>
 
 //==============================================================================
@@ -61,33 +62,33 @@ public:
     // Enable/disable pattern playback
     std::atomic<bool> patternEnabled { true };
     
-    // Chord type selection (for chord building from single notes)
-    enum class ChordType { Major, Minor, Dominant7, Minor7, Major7, Sus4, Sus2 };
-    std::atomic<int> chordTypeIndex { 0 }; // Default to Major
+    // Detected chord info (for UI display)
+    juce::String getDetectedChordName() const 
+    { 
+        juce::SpinLock::ScopedLockType lock (chordNameLock);
+        return detectedChordName; 
+    }
     
-    static inline const juce::StringArray chordTypeNames {
-        "Major", "Minor", "Dom7", "Min7", "Maj7", "Sus4", "Sus2"
-    };
-
 private:
     //==============================================================================
+    // Thread-safe chord name for UI display
+    mutable juce::SpinLock chordNameLock;
+    juce::String detectedChordName { "---" };
+    
+    void setDetectedChordName (const juce::String& name)
+    {
+        juce::SpinLock::ScopedLockType lock (chordNameLock);
+        detectedChordName = name;
+    }
+    
     // Rhythm patterns
     std::vector<RhythmPattern> patterns;
     
-    // Chord intervals for different chord types
-    const std::vector<std::vector<int>> chordIntervals {
-        { 0, 4, 7 },           // Major
-        { 0, 3, 7 },           // Minor
-        { 0, 4, 7, 10 },       // Dominant 7th
-        { 0, 3, 7, 10 },       // Minor 7th
-        { 0, 4, 7, 11 },       // Major 7th
-        { 0, 5, 7 },           // Sus4
-        { 0, 2, 7 },           // Sus2
-    };
+    // Currently detected chord (used for playback)
+    DetectedChord currentChord;
     
     // Currently held input notes (for chord detection)
     std::set<int> heldNotes;
-    int currentRootNote { -1 };
     
     // Timing state
     double currentSampleRate { 44100.0 };
@@ -111,8 +112,9 @@ private:
                                double bpm, bool useHostTiming, double ppqPosition);
     void addPatternNotes (juce::MidiBuffer& midiMessages, double startBeat, 
                           double endBeat, int blockStartSample, int numSamples, double bpm);
-    int getChordNote (int rootNote, int chordIndex) const;
+    int getChordNote (int chordIndex) const;
     void stopAllActiveNotes (juce::MidiBuffer& midiMessages, int samplePosition);
+    void updateDetectedChord();
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };

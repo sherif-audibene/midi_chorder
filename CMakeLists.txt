@@ -29,6 +29,7 @@ CPMAddPackage(
 
 # Make sure you include any new source files here
 set(SourceFiles
+        Source/ChordDetector.h
         Source/PluginEditor.cpp
         Source/PluginEditor.h
         Source/PluginProcessor.cpp
